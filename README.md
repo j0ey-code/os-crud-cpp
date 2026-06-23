@@ -49,4 +49,5 @@ This will create the "filemgr" executable within the project's build directory.
 ## TO-DO List
 
 **\[TO-DO\]:: Expand this README.md document significantly.**
+
 **\[TO-DO\]:: Create version 2.0, which will operate with purely a CLI argument parsing feature instead, rather than a text-based menu in the console.**
