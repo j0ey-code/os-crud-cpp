@@ -309,7 +309,7 @@ Result FileManager::listTree(const fs::path& dirpath,
     return Result::ok();
 }
 
-//  PRIVATE 
+//  PRIVATE METHODS 
 
 Result FileManager::validateParentExists(const fs::path& p) {
     auto parent = p.parent_path();
@@ -322,8 +322,8 @@ Result FileManager::validateParentExists(const fs::path& p) {
 }
 
 /*  Helper function which checks the dry-run flag, logs the operation, 
-        and returns a Result. Every public method calls this at the point 
-        where it would perform its side effect. */
+    and returns a Result. Every public method calls this at the point 
+    where it would perform its side effect. */
 //  return Result "execute or simulate"
 Result FileManager::execOrSim(const std::string& operation,
                      const std::string& target,
