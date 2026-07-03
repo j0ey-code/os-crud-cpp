@@ -5,10 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(filemgr
-    main.cpp
-    FileManager.cpp
-    PlatformOps.cpp
-    Logger.cpp
+    src/main.cpp
+    src/FileManager.cpp
+    src/PlatformOps.cpp
+    src/Logger.cpp
 )
 
 if(WIN32)

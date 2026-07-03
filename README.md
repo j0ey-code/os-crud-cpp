@@ -1,6 +1,6 @@
-## OS CRUD Application v1.0
+## OS CRUD Application v2.0
 
-### Operating System Level CRUD Application in C++, Version 1.0
+### Operating System Level CRUD Application in C++, Version 2.0
 
 ### FILE MANIFEST
 
@@ -12,6 +12,7 @@ Result.h           Success/failure return type
 FileInfo.h         File metadata struct
 Confirmation.h     Callback type alias for delete approval
 AppPaths.h         Cross-platform data directory resolution
+Glob.h             To handle asterisk wildcard character "globbing"
 CMakeLists.txt     Build configuration
 
 **Desc.:** A small side-project that serves as a cross-platform, file management CLI tool using C++17 that performs CRUD-like operations on files and directories. 
@@ -73,7 +74,7 @@ Reinforced my knowledge / skillset in C++, using filesystem APIs, cross-platform
 - permissions are displayed as raw enumerated values thru integer(s), rather than in a human-readable format
 - last modified time is not in human-readable format either, when invoked and displayed by printFileInfo()
 - Linux "send to trash" operation currently performs no de-duplication; not up to filesystem specs!!
-    - overwrite if two files of same name are sent to trash, rather than appending duped file
+    - overwrites if two files of same name are sent to trash, rather than appending duped file
 
 ### ARCHITECTURE:: 
 
@@ -117,12 +118,101 @@ Then, from the *project's working directory*, run the following commands \(or, t
 
 This will create the "filemgr" executable within the project's build directory. 
 
-## Changelog
+## CHANGELOG
 
-06/23/2026 - first push to GitHub, just to get it out in the repos for now
+- **06/23/2026:**
+first push to GitHub, just to get it out in the repos for now
 
-## TO-DO List
+- **07/02/2026:**   
+have now moved previous iteration of project to alt GitHub branch on repo as the initial v1.0
+updated program implements proper CLI argument parsing functionality, and changes to operation names
+additionally, the asterisk (*) character has been added as a wildcard for file names AND / OR extensions
+still multiple bugs / errors to clean up, including...
+1. High-Prio: **Copy / move directory to own descendant operation produces runaway recursion!!!**
+2. High-Prio: Fix Linux filesystem "send to trash" overwrite error on edge case condition of same named files or directories
+3. Medi-Prio: **Extra positional arguments in CLI parsing are silently dropped!!**                
+4. Medi-Prio: tree operation silently hides subtrees, no report, on denied permissions
+5. Medi-Prio: **Move operation treats any and all rename failures as cross-filesystem errors in nature.**
+6. Additional, mainly symbolic link specific issues of medium priority (backburner for now)
 
-**\[TO-DO\]:: Expand this README.md document significantly.**
+## v2.0 07/02/2026 PUSH - FURTHER DETAILS 
+### Highlights
+- **Command-line interface (v2.0).** One verb per invocation (`verb [args]`),
+  in the style of `git`/`cp`/`mv`, replacing the old interactive menu. The tool
+  is now scriptable and pipeable.
+- **`*` filename wildcard** for `cpy`, `mov`, `del`, `trash`.
+- **Verb renames** to be less 1:1 with GNU tools: `create is now inst`, `copy is now cpy`,
+  `move is now mov`, `rm is now del` (`mkdir`, `info`, `rename`, `trash`, `tree`, `log`
+  remain unchanged).
 
-**\[TO-DO\]:: Create version 2.0, which will operate with purely a CLI argument parsing feature instead, rather than a text-based GUI menu in the console.**
+### Design & architecture
+- **UI/backend separation.** `FileManager` knows nothing about the CLI - it
+  takes `(Logger&, ConfirmCallback, dryRun)` and returns a uniform
+  `Result{bool success, string message}`. All CLI logic lives in `main.cpp`.
+- **Injected confirmation.** `ConfirmCallback` is a `std::function`; `main`
+  supplies a lambda honoring `--yes` and treating EOF/closed stdin as "no"
+  (fails safe).
+- **Centralized dry-run + audit log** via `FileManager::execOrSim()`; every
+  mutating op routes its side effect through it.
+- **stdout/stderr discipline.** Data (`tree`/`info`/`log`) to stdout;
+  status/diagnostics (`[OK]`/`[FAIL]`, dry-run banner) to stderr.
+- **Exit codes** as the machine signal: `0` success, `1` op failed, `2` usage.
+- **OS-agnostic paths.** `AppPaths` (log location: XDG / Application Support /
+  LOCALAPPDATA) and `PlatformOps` (native trash).
+
+### Wildcard semantics (`src/Glob.h`)
+Header-only (`namespace glob`), matching the existing utility-header style.
+- `*` is a catch-all **within the name OR the extension**, but **never across
+  the `.`** between them (the period is a strict delimiter).
+  - `*.txt` matches `notes.txt`, **not** `notes.bak.txt`
+  - `file.*` matches `file.md`, `file.cpp`
+  - `*.*` any name with an extension
+  - bare `*` extension-less names only
+- Matching is **case-sensitive** (Linux-like). Expansion is **one directory
+  level** (non-recursive) and only in the final path component. Results are
+  **sorted**; relative patterns yield relative matches.
+- **Integration lives in the CLI layer** (`globOneArg`/`globTwoArg`/`runBatch`
+  in `main.cpp`), so the wildcard reuses existing per-file confirmation,
+  logging, and dry-run without changes to `FileManager`.
+- Wildcard `cpy`/`mov` require the destination to be an existing directory; a
+  partial-failure batch reports each item and exits `1`.
+
+## v2.0 07/02/2026 PUSH - REMAINING ISSUES EXPANDED
+### Major 1 - Copy/move a directory into its own descendant results in runaway recursion
+`cpy box box/inner` (destination inside source) recurses copying-into-itself until the path
+hits `ENAMETOOLONG`.
+- **Observed:** operation ends in `[FAIL] Copy failed: File name too long`, but only **after
+  creating ~818 junk directories nested ~410 levels deep** under `box/inner`. The junk is left
+  on disk (partial-failure is not rolled back).
+- **Risk:** inode/space exhaustion; deep trees that ordinary `rm` may struggle to remove.
+- **Location:** `FileManager::copy` / `FileManager::move` (`src/FileManager.cpp`).
+
+### Major 2 - Trashing two files with the same basename silently destroys the first
+Trash `a/dup.txt` (content `FIRST`), then `b/dup.txt` (content `SECOND`).
+- **Observed:** both commands exit `0` with `[OK] Moved to Trash`; the trash ends up with a
+  **single** `dup.txt` containing `SECOND`. `FIRST` is **permanently lost**, no warning.
+- **Related:** `.trashinfo` writes a **relative** `Path=` (observed `Path=trash1.txt`); the
+  freedesktop spec requires an absolute path, so desktop "Restore" would misbehave.
+- **Location:** Linux branch of `platform::moveToTrash` (`src/PlatformOps.cpp`) — no de-dup /
+  no `Path` normalization.
+
+### Minor 1 - Extra positional arguments silently dropped
+`filemgr mkdir zz1 zz2` creates **only `zz1`**, exits `0`; `zz2` is discarded with no error.
+Same for any command given more positionals than it consumes.
+- **Risk:** a scripted `mkdir a b c` (or a mistyped multi-arg call) silently does less than asked
+  while reporting success.
+- **Location:** command dispatch in `src/main.cpp` — no "too many arguments" check.
+
+### Minor 2 - `tree` / `info` silently hide permission-denied subtrees
+With a child directory `chmod 000`, `tree vault` prints the directory name but **omits its contents with no error**, exiting as `0`.
+- **Observed:** `secret/` listed, `secret/classified.txt` invisible, `tree rc=0`.
+- **Cause:** `directory_iterator(dir, ec)` errors are swallowed into `ec` and never surfaced.
+- **Location:** `FileManager::listTree` (`src/FileManager.cpp`).
+
+### Minor 3 - `mov` treats any and all rename failures as cross-filesystem in nature
+In `FileManager::move`, any non-zero `ec` from `fs::rename` triggers the copy-then-delete
+fallback — not just `EXDEV`. A rename that fails for another reason (e.g. permissions, read-only
+destination) will attempt a full copy+delete instead of reporting the real error, and produces a
+second (`COPY`) log entry. Could not force a non-EXDEV rename failure in the single-filesystem
+sandbox, so this is reported from code review, consistent with the documented caveat.
+- **Location:** `src/FileManager.cpp:225-239`.
