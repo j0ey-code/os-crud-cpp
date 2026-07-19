@@ -1,6 +1,6 @@
 ## OS CRUD Application v2.0 (Main)
 
-### Operating System Level CRUD Application in C++, Version 1.0
+### Operating System Level CRUD Application in C++, Version 2.0
 
 ### FILE MANIFEST
 
