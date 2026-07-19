@@ -5,7 +5,7 @@
 
 #pragma once
 #include <functional>
-#include <string> 
+#include <string>
 
 // a type alias for a function that takes a warning message and
 // returns true (proceed w/ deletion) or false (abort operation)

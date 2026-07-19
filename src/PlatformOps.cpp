@@ -62,8 +62,29 @@ Result moveToTrash(const std::filesystem::path& target) {
     fs::create_directories(trashFiles, ec);
     fs::create_directories(trashInfo, ec);
 
-    std::string filename = target.filename().string();
-    fs::rename(target, trashFiles / filename, ec);
+    // Resolve the original location to an ABSOLUTE path *before* moving.
+    // The freedesktop.org spec requires Path= to be absolute so the
+    // desktop's "Restore" knows where the file came from. We use
+    // absolute()+lexically_normal() rather than weakly_canonical() so a
+    // trashed symlink records its own path, not its target's.
+    fs::path origin = fs::absolute(target, ec);
+    if (ec) { origin = target; ec.clear(); }
+    origin = origin.lexically_normal();
+
+    // De-duplicate the name within the trash. Without this, trashing a
+    // second file that shares a basename would have fs::rename silently
+    // overwrite — and permanently destroy — the first one. Keep the
+    // moved file and its .trashinfo basenames in lock-step.
+    const std::string baseName = target.filename().string();
+    std::string trashName = baseName;
+    for (int i = 1;
+         fs::exists(trashFiles / trashName) ||
+         fs::exists(trashInfo / (trashName + ".trashinfo"));
+         ++i) {
+        trashName = baseName + "." + std::to_string(i);
+    }
+
+    fs::rename(target, trashFiles / trashName, ec);
     if (ec) {
         return Result::fail("Failed to move to trash: " + ec.message());
     }
@@ -78,9 +99,9 @@ Result moveToTrash(const std::filesystem::path& target) {
 
     // write the .trashinfo file so the desktop environment
     // knows where the file came from and when it was deleted
-    std::ofstream info(trashInfo / (filename + ".trashinfo"));
+    std::ofstream info(trashInfo / (trashName + ".trashinfo"));
     info << "[Trash Info]\n"
-         << "Path=" << target.string() << "\n"
+         << "Path=" << origin.string() << "\n"
          << "DeletionDate=" << ts.str() << "\n";
 
     return Result::ok("Moved to Trash");

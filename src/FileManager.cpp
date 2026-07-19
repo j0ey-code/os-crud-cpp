@@ -6,6 +6,32 @@
 
 namespace fs = std::filesystem;
 
+namespace {
+/*  True if `dest` is the same location as `source`, or nested somewhere
+    inside it. Copying a directory into itself or one of its own
+    descendants otherwise recurses until the path length explodes
+    ("File name too long"), leaving thousands of junk directories behind.
+
+    Both paths are normalised to absolute form first (weakly_canonical
+    resolves the existing prefix without requiring `dest` to exist yet;
+    if that fails we fall back to a lexical normalisation). We then ask
+    for `dest` relative to `source`: an empty result means they are
+    unrelated, "." means they are equal, and any result NOT beginning
+    with ".." means `dest` sits underneath `source`. */
+bool isSelfOrDescendant(const fs::path& source, const fs::path& dest) {
+    std::error_code ec;
+    fs::path s = fs::weakly_canonical(source, ec);
+    if (ec) { s = fs::absolute(source).lexically_normal(); ec.clear(); }
+    fs::path d = fs::weakly_canonical(dest, ec);
+    if (ec) { d = fs::absolute(dest).lexically_normal(); }
+
+    fs::path rel = d.lexically_relative(s);
+    if (rel.empty()) return false;          // unrelated / different roots
+    if (rel == fs::path(".")) return true;  // same directory
+    return *rel.begin() != "..";            // no leading ".." => nested
+}
+}  // namespace
+
 // CUSTOM CONSTRUCTOR; logger reference and dry-run flag
 
 FileManager::FileManager(Logger& logger, ConfirmCallback confirm,
@@ -174,6 +200,13 @@ Result FileManager::copy(const fs::path& source,
     fs::path actualDest = destination;
     if (fs::is_directory(destination)) {
         actualDest = destination / source.filename();
+    }
+
+    // Guard against recursively copying a directory into itself or a
+    // descendant, which would loop until the path length explodes.
+    if (fs::is_directory(source) && isSelfOrDescendant(source, actualDest)) {
+        return Result::fail("Refusing to copy a directory into itself or a "
+                            "subdirectory of itself: " + source.string());
     }
 
     if (fs::exists(actualDest)) {

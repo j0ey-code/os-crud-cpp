@@ -30,7 +30,11 @@ void printFileInfo(const FileInfo& file) {
               << "  Size:       " << file.sizeBytes << " bytes\n"
               << "  Directory:  " << (file.isDirectory ? "yes" : "no") << "\n";
     if (file.isDirectory) {
-        std::cout << "  Children:   " << file.childCount << "\n";
+        std::cout << "  Children:   " << file.childCount;
+        if (!file.childCountComplete) {
+            std::cout << " (incomplete — directory not fully readable)";
+        }
+        std::cout << "\n";
     }
 }
 
@@ -49,7 +53,7 @@ void printUsage(std::ostream& os) {
        << "  trash  <path>                      Send a file or directory to the trash (may use *)\n"
        << "  tree   <path> [--depth <n>]        Print a recursive directory tree\n"
        << "  log                                Print the audit log\n\n"
-       << "Asterisk Wildcards (for cpy, mov, del, trash):\n"
+       << "Wildcards (cpy, mov, del, trash):\n"
        << "  '*' matches any run of characters within the name OR the extension,\n"
        << "  but never across the '.' between them:\n"
        << "    '*.txt'   every .txt file        'file.*'  file with any extension\n"
@@ -61,7 +65,7 @@ void printUsage(std::ostream& os) {
        << "  -y, --yes        Assume \"yes\" to confirmation prompts (for scripts)\n"
        << "  -h, --help       Show this help text and exit\n"
        << "  -V, --version    Show version information and exit\n\n"
-       << "Program exit codes: 0 success, 1 operation failed, 2 usage error\n";
+       << "Exit codes: 0 success, 1 operation failed, 2 usage error\n";
 }
 
 /*  Parse the command line. argv[0] is always the program name, so
@@ -130,11 +134,23 @@ int main(int argc, char* argv[]) {
     auto argAt = [&](std::size_t idx) -> const std::string& {
         return positionals[idx + 1];
     };
-    // Guard for commands that need a fixed number of arguments.
+    // Guard for commands that take an EXACT number of positional
+    // arguments. Too few is an obvious error; too many usually means a
+    // quoting mistake (e.g. an unquoted wildcard the shell expanded, or
+    // an unescaped space), so we reject rather than silently dropping the
+    // extras — which could otherwise hide a mistake on a destructive verb.
     auto needArgs = [&](std::size_t need) -> bool {
         if (argCount < need) {
             std::cerr << "Error: '" << command << "' requires "
-                      << need << " argument" << (need == 1 ? "" : "s") << "\n";
+                      << need << " argument" << (need == 1 ? "" : "s")
+                      << " (got " << argCount << ")\n";
+            return false;
+        }
+        if (argCount > need) {
+            std::cerr << "Error: '" << command << "' takes exactly "
+                      << need << " argument" << (need == 1 ? "" : "s")
+                      << " (got " << argCount << "); "
+                      << "quote paths that contain spaces or '*'\n";
             return false;
         }
         return true;
@@ -160,7 +176,7 @@ int main(int argc, char* argv[]) {
     auto confirmFn = [&](const std::string& prompt) -> bool {
         if (assumeYes) return true;
         std::cout << "⚠ Confirm: " << prompt << "\n"
-                  << "Proceed? (y/n): ";
+                  << "Proceed? (y/N): ";
         std::string answer;
         if (!std::getline(std::cin, answer)) return false;
         return !answer.empty() && (answer[0] == 'y' || answer[0] == 'Y');
@@ -229,6 +245,11 @@ int main(int argc, char* argv[]) {
     /*  `log` produces data on stdout and needs no path argument,
         so handle it up front and return directly. */
     if (command == "log") {
+        if (argCount != 0) {
+            std::cerr << "Error: 'log' takes no arguments (got "
+                      << argCount << ")\n";
+            return 2;
+        }
         std::cout << logger.readAll();
         return 0;
     }

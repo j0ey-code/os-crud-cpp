@@ -1,21 +1,21 @@
-/* Header-only helper for a VERY BASIC filename wildcard, used by the
-   cpy / mov / del / trash commands so a single invocation can act on
-   many files at once (e.g. `filemgr del 'build/*.txt'`).
-
-   The only metacharacter is the asterisk (*). It is a catch-all for any
-   run of characters or digits WITHIN the filename or WITHIN the
-   extension. Crucially, the period ('.') that separates a name from its
-   extension is a strict delimiter: '*' will never expand across a '.',
-   mirroring how the two are treated as distinct components on GNU/Linux.
-  
-     *.txt      matches  notes.txt, a.txt        (any stem, .txt ext)
-     file.*     matches  file.md, file.cpp        (stem "file", any ext)
-     *.*        matches  photo.jpg                (a stem AND an ext)
-     report*    matches  report, report2          (extension-less names)
-     *.txt      does NOT match  notes.bak.txt      ('*' can't cross the '.')
-  
-   Because '*' cannot cross a period, a bare `*` matches only names that
-   have no extension at all; use `*.*` to catch names that do. */
+// Header-only helper for a VERY BASIC filename wildcard, used by the
+// cpy / mov / del / trash commands so a single invocation can act on
+// many files at once (e.g. `filemgr del 'build/*.txt'`).
+//
+// The only metacharacter is the asterisk (*). It is a catch-all for any
+// run of characters or digits WITHIN the filename or WITHIN the
+// extension. Crucially, the period ('.') that separates a name from its
+// extension is a strict delimiter: '*' will never expand across a '.',
+// mirroring how the two are treated as distinct components on GNU/Linux.
+//
+//   *.txt      matches  notes.txt, a.txt        (any stem, .txt ext)
+//   file.*     matches  file.md, file.cpp        (stem "file", any ext)
+//   *.*        matches  photo.jpg                (a stem AND an ext)
+//   report*    matches  report, report2          (extension-less names)
+//   *.txt      does NOT match  notes.bak.txt      ('*' can't cross the '.')
+//
+// Because '*' cannot cross a period, a bare `*` matches only names that
+// have no extension at all; use `*.*` to catch names that do.
 
 #pragma once
 #include <filesystem>
