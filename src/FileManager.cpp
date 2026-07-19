@@ -105,9 +105,11 @@ Result FileManager::readInfo(const fs::path& target, FileInfo& out) {
         for (auto& _ : fs::directory_iterator(target, ec)) {
             ++out.childCount;
         }
+        out.childCountComplete = !ec;
     } else {
         out.sizeBytes  = fs::file_size(target, ec);
         out.childCount = 0;
+        out.childCountComplete = true;
     }
 
     // Log the read but always execute — reading changes nothing
