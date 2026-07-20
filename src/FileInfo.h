@@ -13,5 +13,5 @@ struct FileInfo {
     std::filesystem::file_time_type lastModified;
     bool isDirectory = false;
     std::size_t childCount = 0; // only meaningful for directories
-    bool childCountComplete = true; 
+    bool childCountComplete = true; // false if the dir couldn't be fully read
 };

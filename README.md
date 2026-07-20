@@ -1,18 +1,19 @@
-## OS CRUD Application v2.0 (Main)
+## OS CRUD Application v2.0
 
 ### Operating System Level CRUD Application in C++, Version 2.0
 
 ### FILE MANIFEST
 
-main.cpp           Entry point, menu loop, user I/O
-FileManager.h/cpp  Core CRUD logic, execOrSim chokepoint
-PlatformOps.h/cpp  OS-specific trash deletion
-Logger.h/cpp       Timestamped audit log with immediate flush
-Result.h           Success/failure return type
-FileInfo.h         File metadata struct
-Confirmation.h     Callback type alias for delete approval
-AppPaths.h         Cross-platform data directory resolution
-CMakeLists.txt     Build configuration
+- main.cpp: Entry point, function handling, args parsed
+- FileManager.h/cpp: Core CRUD logic, execOrSim chokepoint
+- PlatformOps.h/cpp: OS-specific trash deletion
+- Logger.h/cpp: Timestamped audit log with immediate flush
+- Result.h: Success/failure return type
+- FileInfo.h: File metadata struct
+- Confirmation.h: Callback type alias for delete approval
+- AppPaths.h: Cross-platform data directory resolution
+- Glob.h: Header for filename wildcarding feature
+- CMakeLists.txt: Build configuration
 
 **Desc.:** A small side-project that serves as a cross-platform, file management CLI tool using C++17 that performs CRUD-like operations on files and directories. 
 Built with C++17, CMake 3.15+, std::filesystem, and platform-native APIs (Win32 Shell, freedesktop trash spec, macOS AppleScript). No external libraries.
@@ -66,14 +67,12 @@ Reinforced my knowledge / skillset in C++, using filesystem APIs, cross-platform
     - cross-platform move / rename must fallback and utilize copy operation as well
     - copy() routes itself through execOrSim() independently which generates an additional log entry for the COPY method
     - cross-platform move operation performs and logs both a COPY and a MOVE operation
-- renaming file extensions does **NOT** and will **NOT** convert files
+- renaming file extensions **DOES NOT** and **WILL NOT** convert files
+- symbolic link awareness and handling is limited; deletion of symlinks now solved through absolute origin though
 - macOS "send to trash" operation ported out to "osascript"
     - could fail if Finder is not available
-- no symbolic link awareness or handling of symbolic links
 - permissions are displayed as raw enumerated values thru integer(s), rather than in a human-readable format
 - last modified time is not in human-readable format either, when invoked and displayed by printFileInfo()
-- Linux "send to trash" operation currently performs no de-duplication; not up to filesystem specs!!
-    - overwrite if two files of same name are sent to trash, rather than appending duped file
 
 ### ARCHITECTURE:: 
 
@@ -119,10 +118,15 @@ This will create the "filemgr" executable within the project's build directory.
 
 ## Changelog
 
-06/23/2026 - first push to GitHub, just to get it out in the repos for now
+- 06/23/2026: first push to GitHub, just to get it out in the repos for now
+
+- 07/20/2026: full v2.0 now (almost?) consolidated, multiple med-prio bugs / errors now fixed including...
+    - infinite recursion bug upon copy within self operation, safeguard now in place
+    - errors on send to trash operation for files of same name, trash de-duplication by increment safeguard now implemented
+    - stricter argument parser handling within main.cpp itself (not too few args, but not too many either)
+    - symlink deletions now fixed by recording the origin of a file as an absolute, normalized path variable
+    - permission-denied directory counts now report as such instead of a misleading "0 children"
+    - unreadable sub-directories are now labeled appropriately as such for the recursive tree listing operation too
+    - move logic fixed so copy-then-delete only fires upon *actual* cross-filesystem errors, not every move / rename
 
 ## TO-DO List
-
-**\[TO-DO\]:: Expand this README.md document significantly.**
-
-**\[TO-DO\]:: Create version 2.0, which will operate with purely a CLI argument parsing feature instead, rather than a text-based GUI menu in the console.**

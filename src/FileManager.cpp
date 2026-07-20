@@ -102,14 +102,20 @@ Result FileManager::readInfo(const fs::path& target, FileInfo& out) {
     if (out.isDirectory) {
         out.sizeBytes = 0;
         out.childCount = 0;
-        for (auto& _ : fs::directory_iterator(target, ec)) {
-            ++out.childCount;
+        // Open explicitly so a permission-denied directory reports an
+        // incomplete count rather than a misleading "0 children".
+        std::error_code dirEc;
+        fs::directory_iterator dirIt(target, dirEc);
+        if (dirEc) {
+            out.childCountComplete = false;
+        } else {
+            for ([[maybe_unused]] auto& _ : dirIt) {
+                ++out.childCount;
+            }
         }
-        out.childCountComplete = !ec;
     } else {
         out.sizeBytes  = fs::file_size(target, ec);
         out.childCount = 0;
-        out.childCountComplete = true;
     }
 
     // Log the read but always execute — reading changes nothing
@@ -158,7 +164,7 @@ Result FileManager::remove(const fs::path& target, bool useTrash) {
     if (fs::is_directory(target)) {
         std::size_t count = 0;
         std::error_code ec;
-        for (auto& _ : fs::recursive_directory_iterator(target, ec)) {
+        for ([[maybe_unused]] auto& _ : fs::recursive_directory_iterator(target, ec)) {
             ++count;
         }
         warning += " (directory with " + std::to_string(count) + " items)";
@@ -249,28 +255,47 @@ Result FileManager::move(const fs::path& source,
                             + actualDest.string());
     }
 
-    // fs::rename works as a move when crossing directories.
-    // On the same filesystem it's nearly instant (just a metadata
-    // update). Across filesystems, some implementations will fail —
-    // in that case you'd fall back to copy-then-delete.
+    // fs::rename works as a move when crossing directories, and on the
+    // same filesystem it's nearly instant (just a metadata update).
     return execOrSim("MOVE", source.string(),
         "move " + source.string() + " → " + actualDest.string(),
         [&]() -> Result {
             std::error_code ec;
             fs::rename(source, actualDest, ec);
-            if (ec) {
-                auto copyRes = copy(source, actualDest);
-                if (!copyRes.success) return copyRes;
-                if (fs::is_directory(source)) {
-                    fs::remove_all(source, ec);
-                } else {
-                    fs::remove(source, ec);
-                }
-                if (ec) {
-                    return Result::fail(
-                        "Copied but failed to remove original: "
-                        + ec.message());
-                }
+            if (!ec) {
+                return Result::ok("Moved to: " + actualDest.string());
+            }
+
+            // Only a genuine cross-filesystem rename justifies the
+            // copy-then-delete fallback. Every OTHER rename failure
+            // (permission denied, invalid target such as moving a
+            // directory into itself, etc.) is reported as-is rather
+            // than attempting a copy that could do something surprising.
+            if (ec != std::errc::cross_device_link) {
+                return Result::fail("Move failed: " + ec.message());
+            }
+
+            // Cross-device move: copy across, then remove the original.
+            auto copyRes = copy(source, actualDest);
+            if (!copyRes.success) {
+                // Clean up whatever the failed copy left behind so a
+                // botched cross-device move doesn't litter the target.
+                std::error_code cleanupEc;
+                fs::remove_all(actualDest, cleanupEc);
+                return Result::fail("Cross-device move failed during copy: "
+                                    + copyRes.message);
+            }
+
+            std::error_code rmEc;
+            if (fs::is_directory(source)) {
+                fs::remove_all(source, rmEc);
+            } else {
+                fs::remove(source, rmEc);
+            }
+            if (rmEc) {
+                return Result::fail(
+                    "Copied to destination but could not remove original: "
+                    + rmEc.message());
             }
             return Result::ok("Moved to: " + actualDest.string());
         });
@@ -291,6 +316,11 @@ Result FileManager::listTree(const fs::path& dirpath,
     // Start with the root directory name
     output += dirpath.filename().string() + "/\n";
 
+    // Count directories we couldn't read so the tree can flag them
+    // instead of silently rendering them as empty (which would make an
+    // incomplete listing look complete).
+    std::size_t unreadable = 0;
+
     // Use a helper lambda for recursion so we can track depth
     // and build the tree-drawing characters.
     std::function<void(const fs::path&, const std::string&, int)>
@@ -300,13 +330,23 @@ Result FileManager::listTree(const fs::path& dirpath,
 
         if (maxDepth >= 0 && currentDepth >= maxDepth) return;
 
+        // Open the directory explicitly so we can distinguish "empty"
+        // from "couldn't read" (e.g. permission denied). A silent empty
+        // listing here is exactly the trap we want to avoid.
+        std::error_code ec;
+        fs::directory_iterator dirIt(dir, ec);
+        if (ec) {
+            output += prefix + "└── [unreadable: " + ec.message() + "]\n";
+            ++unreadable;
+            return;
+        }
+
         // Collect and sort entries so output is deterministic.
         // directory_iterator order is OS-dependent — on Linux it's
         // essentially random (inode order), so sorting alphabetically
         // makes the tree readable and reproducible.
         std::vector<fs::directory_entry> entries;
-        std::error_code ec;
-        for (auto& entry : fs::directory_iterator(dir, ec)) {
+        for (auto& entry : dirIt) {
             entries.push_back(entry);
         }
         std::sort(entries.begin(), entries.end(),
@@ -341,6 +381,12 @@ Result FileManager::listTree(const fs::path& dirpath,
     };
 
     walk(dirpath, "", 0);
+    if (unreadable > 0) {
+        return Result::ok("Listed with " + std::to_string(unreadable)
+                          + " unreadable director"
+                          + (unreadable == 1 ? "y" : "ies")
+                          + " (see [unreadable] markers)");
+    }
     return Result::ok();
 }
 
