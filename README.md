@@ -130,3 +130,5 @@ This will create the "filemgr" executable within the project's build directory.
     - move logic fixed so copy-then-delete only fires upon *actual* cross-filesystem errors, not every move / rename
 
 ## TO-DO List
+
+- Flesh out README.md more~!!
