@@ -142,6 +142,9 @@ This will create the "filemgr" executable within the project's build directory, 
     - core dumped on permission-denied file operations, not just error handled (for ALL OSes actually, even Linux)
     - Recycle Bin diagnostics on Windows and macOS vs. Trash on Linux
     - no case-sensitivity for filenames on Windows and macOS
+These tests were run using a mix of Wine, GitHub's Workflows Continuous Integration, and Claude Code for streamlining the test process.
+An additional branch of the repository has been created to handle the GitHub Workflow CI, before it is eventually folded
+back into the main / main origin branch upon successful conclusion of the tests, and completion of the bug fixes.
 
 ## TO-DO List
 
