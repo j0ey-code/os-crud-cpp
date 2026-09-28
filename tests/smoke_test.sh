@@ -18,6 +18,12 @@ if [ $# -eq 0 ]; then
     exit 2
 fi
 FM=("$@")
+# The tests cd into a scratch dir, so pin relative paths to the binary.
+for i in "${!FM[@]}"; do
+    if [ -f "${FM[$i]}" ] && [ "${FM[$i]#/}" = "${FM[$i]}" ]; then
+        FM[$i]="$PWD/${FM[$i]}"
+    fi
+done
 
 case "${FILEMGR_TARGET:-$(uname -s)}" in
     linux|Linux)                 TARGET=linux ;;
