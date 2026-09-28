@@ -294,7 +294,18 @@ t_unicode_glob() {
     mkdir out && : > "Ωmega.txt"
     fm cpy '*.txt' out 2>/dev/null && [ -f "out/Ωmega.txt" ]
 }
+t_unicode_lookalike() {
+    # Regression: on Windows 'Ω' was best-fit mapped to 'O', so this
+    # pattern permanently deleted Omega.txt and left Ωmega.txt alone.
+    # Refusing to act is acceptable; touching Omega.txt never is.
+    fresh uni_lookalike
+    echo keep > "Omega.txt"
+    echo del  > "Ωmega.txt"
+    fm -y del 'Ω*.txt' >/dev/null 2>&1
+    [ -f "Omega.txt" ] && [ "$(cat Omega.txt)" = keep ]
+}
 check "path with spaces"             t_spaces
+check "glob never hits look-alike"   t_unicode_lookalike
 check "unicode name via argv"        t_unicode_inst
 check "unicode existing file info"   t_unicode_existing
 check "unicode name via glob"        t_unicode_glob

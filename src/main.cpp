@@ -8,6 +8,12 @@
 #include <vector>
 #include <functional>
 
+#ifdef _WIN32
+    #define NOMINMAX
+    #include <windows.h>
+    #include <shellapi.h>
+#endif
+
 namespace fs = std::filesystem;
 
 /*  v2.0 turns filemgr from an interactive, menu-driven console
@@ -77,6 +83,36 @@ void printUsage(std::ostream& os) {
     Global flags may appear anywhere (before or after the command),
     which is what users expect from a modern CLI. */
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    // Prompts echo the filename being confirmed, so the console must use
+    // the same code page as our strings (UTF-8 under the manifest)
+    // rather than its legacy OEM default.
+    SetConsoleOutputCP(GetACP());
+
+    /*  The embedded manifest makes argv UTF-8 on Windows 10 1903+. On
+        older Windows it arrives in the legacy code page instead, where
+        unrepresentable characters are "best-fit" mapped to look-alikes
+        ('Ω' -> 'O'), so a path could silently name a different file.
+        Refuse such arguments outright rather than act on a guess. */
+    if (GetACP() != CP_UTF8) {
+        int wargc = 0;
+        LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+        for (int i = 1; wargv && i < wargc; ++i) {
+            BOOL lossy = FALSE;
+            WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, wargv[i], -1,
+                                nullptr, 0, nullptr, &lossy);
+            if (lossy) {
+                std::cerr << "Error: argument " << i << " contains characters "
+                          << "this system's code page cannot represent; "
+                          << "refusing to guess which file was meant\n";
+                LocalFree(wargv);
+                return 2;
+            }
+        }
+        LocalFree(wargv);
+    }
+#endif
+
     bool dryRun    = false;
     bool assumeYes = false;
     std::string content;            // for `inst --content`
