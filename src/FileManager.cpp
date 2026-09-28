@@ -30,6 +30,83 @@ bool isSelfOrDescendant(const fs::path& source, const fs::path& dest) {
     if (rel == fs::path(".")) return true;  // same directory
     return *rel.begin() != "..";            // no leading ".." => nested
 }
+
+/*  True if `to` is merely a different spelling of `from`'s own directory
+    entry, e.g. Report.txt -> report.txt on a case-insensitive filesystem
+    (the default on Windows and macOS), or a Unicode-normalisation change
+    on macOS. There, exists(to) sees `from` itself, which must not count
+    as a conflict.
+
+    Every check below is needed to rule out a genuinely DIFFERENT file,
+    which a rename would otherwise overwrite:
+      - names must actually differ, in the same directory;
+      - equivalent() must report the same file (so a.txt -> b.txt is
+        refused when b.txt resolves to an unrelated B.txt);
+      - neither side may be a symlink, since equivalent() follows links
+        and would equate a link with its target;
+      - no entry spelled exactly like `to` may exist (a hard link to the
+        same file is still a separate entry). */
+fs::path parentOrDot(const fs::path& p) {
+    return p.has_parent_path() ? p.parent_path() : fs::path(".");
+}
+
+// True if p's directory holds an entry spelled EXACTLY like p's filename
+// (a case-insensitive exists() can't tell Report.txt from report.txt).
+bool hasExactEntry(const fs::path& p) {
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator(parentOrDot(p), ec)) {
+        if (entry.path().filename().native() == p.filename().native()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool isRespellingOf(const fs::path& from, const fs::path& to) {
+    if (from.filename().native() == to.filename().native()) return false;
+
+    std::error_code ec;
+    if (!fs::equivalent(parentOrDot(from), parentOrDot(to), ec) || ec) {
+        return false;
+    }
+
+    if (fs::is_symlink(fs::symlink_status(from, ec)) || ec) return false;
+    if (fs::is_symlink(fs::symlink_status(to, ec)) || ec) return false;
+    if (!fs::equivalent(from, to, ec) || ec) return false;
+
+    return !hasExactEntry(to);
+}
+
+/*  Carry out a respelling rename. NTFS and APFS do this directly, but
+    some filesystems (FAT, certain network shares, Wine over a Linux
+    filesystem) treat it as a no-op that still reports success. So
+    confirm the new spelling actually took; if not, go through a
+    temporary name, and if even that doesn't stick, report failure
+    rather than claiming a rename that never happened. */
+std::error_code renameRespelling(const fs::path& from, const fs::path& to) {
+    std::error_code ec;
+    fs::rename(from, to, ec);
+    if (ec || hasExactEntry(to)) return ec;
+
+    fs::path tmp = from;
+    tmp += ".filemgr-tmp";
+    for (int i = 1; fs::exists(tmp); ++i) {
+        tmp = from;
+        tmp += ".filemgr-tmp" + std::to_string(i);
+    }
+    fs::rename(from, tmp, ec);
+    if (ec) return ec;
+    fs::rename(tmp, to, ec);
+    if (ec) {
+        std::error_code undo;
+        fs::rename(tmp, from, undo);   // put the original name back
+        return ec;
+    }
+    if (!hasExactEntry(to)) {
+        return std::make_error_code(std::errc::operation_not_supported);
+    }
+    return {};
+}
 }  // namespace
 
 // CUSTOM CONSTRUCTOR; logger reference and dry-run flag
@@ -130,7 +207,8 @@ Result FileManager::rename(const fs::path& oldPath,
     if (!fs::exists(oldPath)) {
         return Result::fail("Source not found: " + oldPath.string());
     }
-    if (fs::exists(newPath)) {
+    const bool respelling = isRespellingOf(oldPath, newPath);
+    if (!respelling && fs::exists(newPath)) {
         return Result::fail("Destination already exists: " + newPath.string());
     }
 
@@ -143,7 +221,11 @@ Result FileManager::rename(const fs::path& oldPath,
         "rename " + oldPath.string() + " → " + newPath.string(),
         [&]() -> Result {
             std::error_code ec;
-            fs::rename(oldPath, newPath, ec);
+            if (respelling) {
+                ec = renameRespelling(oldPath, newPath);
+            } else {
+                fs::rename(oldPath, newPath, ec);
+            }
             if (ec) return Result::fail("Rename failed: " + ec.message());
             return Result::ok("Renamed to: " + newPath.string());
         });
@@ -245,12 +327,17 @@ Result FileManager::move(const fs::path& source,
         return Result::fail("Source not found: " + source.string());
     }
 
+    // A case-only respelling (mov Data data) is a rename in place. It must
+    // be caught first: `data` "is a directory" (it's Data itself), so the
+    // copy-into rule below would try to move Data into Data/Data.
+    const bool respelling = isRespellingOf(source, destination);
+
     fs::path actualDest = destination;
-    if (fs::is_directory(destination)) {
+    if (!respelling && fs::is_directory(destination)) {
         actualDest = destination / source.filename();
     }
 
-    if (fs::exists(actualDest)) {
+    if (!respelling && fs::exists(actualDest)) {
         return Result::fail("Destination already exists: "
                             + actualDest.string());
     }
@@ -261,7 +348,12 @@ Result FileManager::move(const fs::path& source,
         "move " + source.string() + " → " + actualDest.string(),
         [&]() -> Result {
             std::error_code ec;
-            fs::rename(source, actualDest, ec);
+            if (respelling) {
+                ec = renameRespelling(source, actualDest);
+                if (ec) return Result::fail("Move failed: " + ec.message());
+            } else {
+                fs::rename(source, actualDest, ec);
+            }
             if (!ec) {
                 return Result::ok("Moved to: " + actualDest.string());
             }
