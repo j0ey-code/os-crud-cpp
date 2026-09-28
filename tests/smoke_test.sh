@@ -389,6 +389,45 @@ if [ "$TARGET" != windows ] && [ "$(id -u)" != 0 ]; then
         [ $rc -eq 1 ]
     }
     check "permission denied fails cleanly (exit 1, no abort)" t_perm_no_crash
+
+    t_perm_all_commands() {
+        # Each of these used to abort (exit 134) on the throwing
+        # fs::exists(); all must now fail with an ordinary exit 1.
+        fresh perm_cmds
+        mkdir locked && : > locked/f && : > a.txt && chmod 000 locked
+        local args rc bad=0
+        for args in "info locked/f" "cpy locked/f out.txt" "rename locked/f g" \
+                    "mov a.txt locked" "inst locked/new.txt" "mkdir locked/newdir"; do
+            fm -y $args >/dev/null 2>&1
+            rc=$?
+            if [ $rc -ne 1 ]; then echo "      '$args' exited $rc"; bad=1; fi
+        done
+        chmod 755 locked
+        [ $bad -eq 0 ]
+    }
+    t_perm_info_message() {
+        # "Does not exist" was a lie: the file exists but can't be seen.
+        fresh perm_msg
+        mkdir locked && : > locked/f && chmod 000 locked
+        local out
+        out=$(fm info locked/f 2>&1)
+        chmod 755 locked
+        grep -q 'Permission denied' <<<"$out" && ! grep -q 'Does not exist' <<<"$out"
+    }
+    t_perm_del_unreadable_subdir() {
+        # Counting items for the delete prompt walked into the unreadable
+        # subdir and aborted; the prompt must now admit the count is partial.
+        fresh perm_subdir
+        mkdir -p tree/sub && : > tree/sub/x && chmod 000 tree/sub
+        local out rc
+        out=$(printf 'n\n' | fm del tree 2>&1)
+        rc=$?
+        chmod 755 tree/sub
+        [ $rc -eq 0 ] && grep -q 'at least' <<<"$out" && [ -e tree/sub/x ]
+    }
+    check "permission denied: every command exits 1" t_perm_all_commands
+    check "permission denied: info says so"          t_perm_info_message
+    check "del prompt with unreadable subdir"        t_perm_del_unreadable_subdir
 fi
 
 echo
