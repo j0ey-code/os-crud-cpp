@@ -27,18 +27,38 @@ Result moveToTrash(const std::filesystem::path& target) {
     // Windows: use SHFileOperationW with FOF_ALLOWUNDO
     // The ALLOWUNDO flag is what makes it go to the Recycle Bin
     // rather than being permanently destroyed.
-    std::wstring widePath = target.wstring();
+    //
+    // ...but the SHFILEOPSTRUCT docs only promise that for a fully
+    // qualified path: given a relative one, FO_DELETE is documented to
+    // ignore FOF_ALLOWUNDO and delete permanently. Current Windows does
+    // recycle relative paths, but we don't bet the user's files on
+    // undocumented behaviour, so always hand it an absolute path.
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path abs = fs::absolute(target, ec);
+    if (ec) return Result::fail("Cannot resolve path: " + ec.message());
+    // lexically_normal() also turns '/' into the native '\' separator.
+    abs = abs.lexically_normal();
+    if (!abs.has_filename()) abs = abs.parent_path();  // drop trailing '\'
+
+    std::wstring widePath = abs.wstring();
     widePath.push_back(L'\0'); // SHFileOperation needs double-null termination
 
     SHFILEOPSTRUCTW op = {};
     op.wFunc  = FO_DELETE;
     op.pFrom  = widePath.c_str();
-    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT;
+    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI
+              | FOF_SILENT;
 
     int result = SHFileOperationW(&op);
     if (result != 0) {
         return Result::fail("SHFileOperation failed with code "
                             + std::to_string(result));
+    }
+    // With FOF_NOCONFIRMATION/FOF_NOERRORUI the shell may abort part of
+    // the operation silently yet still return 0.
+    if (op.fAnyOperationsAborted) {
+        return Result::fail("Move to Recycle Bin was aborted");
     }
     return Result::ok("Moved to Recycle Bin");
 
