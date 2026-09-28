@@ -107,18 +107,22 @@ main.cpp
 
 First, ensure you have a C++17 compatible compiler installed properly, along with CMake3.15+. 
 
-Then, from the *project's working directory*, run the following commands \(or, the Windows / macOS equivalents\)...
+Then, from the *project's working directory / PWD*, run the following commands \(or, the Windows / macOS equivalents\)...
 
 1. mkdir build
 2. cd build
 3. cmake ..
 4. make
 
-This will create the "filemgr" executable within the project's build directory. 
+This will create the "filemgr" executable within the project's build directory, which is the executable to use.
 
 ## Changelog
 
 - 06/23/2026: first push to GitHub, just to get it out in the repos for now
+    - the initial draft was a menu-based program which did the same operations
+    - it was explicitly branched off and left behind as the v1.0, because the CLI tool was the final goal
+    - still available for download and use, but likely riddled with errors not yet patched MEANING
+        - file operation errors like delete, send to trash, or copy which were not 100% resolved yet MAY ERROR AND I AM NOT LIABLE!!
 
 - 07/20/2026: full v2.0 now (almost?) consolidated, multiple med-prio bugs / errors now fixed including...
     - infinite recursion bug upon copy within self operation, safeguard now in place
@@ -128,6 +132,19 @@ This will create the "filemgr" executable within the project's build directory.
     - permission-denied directory counts now report as such instead of a misleading "0 children"
     - unreadable sub-directories are now labeled appropriately as such for the recursive tree listing operation too
     - move logic fixed so copy-then-delete only fires upon *actual* cross-filesystem errors, not every move / rename
+
+- 09/2X/2026: returning to this side-project nearly 2 months later to conduct full suite of evaluation
+    - naive dev strategies, but also this as a backburner project, left it here
+    - full unit and smoke tests for cross-compatibility had not been fully conducted
+    - edge cases and tests prepared for Windows and macOS platform integrity
+    - compiles on all OSes, but failing multiple edge case checks for UTF-8 vs. Unicdoe filename handling
+    - macOS presented with a file injeection error because deletion was handled via command-line through osascript improperly
+    - core dumped on permission-denied file operations, not just error handled (for ALL OSes actually, even Linux)
+    - Recycle Bin diagnostics on Windows and macOS vs. Trash on Linux
+    - no case-sensitivity for filenames on Windows and macOS
+These tests were run using a mix of Wine, GitHub's Workflows Continuous Integration, and Claude Code for streamlining the test process.
+An additional branch of the repository has been created to handle the GitHub Workflow CI, before it is eventually folded
+back into the main / main origin branch upon successful conclusion of the tests, and completion of the bug fixes.
 
 ## TO-DO List
 

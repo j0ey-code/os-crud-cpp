@@ -85,6 +85,13 @@ inline bool match(const std::string& pattern, const std::string& text) {
     spelling, so a relative pattern yields relative matches. Matches are
     sorted by filename for deterministic, reproducible output.
 
+    Names are compared as UTF-8 (u8string) and each match is built from
+    the directory entry's own path object, never re-parsed from a
+    string. On Windows, .string() uses the legacy code page, which
+    "best-fit" maps characters it can't hold ('Ω' -> 'O'); rebuilding a
+    path from that string can name a DIFFERENT file that merely looks
+    alike, and a delete would then hit the wrong one.
+
     Wildcards are only supported in the final component; a '*' anywhere
     in the parent path is rejected via `ec`. On any filesystem error
     `ec` is set and an empty vector is returned. */
@@ -94,21 +101,23 @@ expand(const std::filesystem::path& pattern, std::error_code& ec) {
     ec.clear();
 
     const fs::path parent  = pattern.parent_path();
-    const std::string name = pattern.filename().string();
+    const std::string name = pattern.filename().u8string();
 
-    if (hasWildcard(parent.string())) {
+    if (hasWildcard(parent.u8string())) {
         ec = std::make_error_code(std::errc::invalid_argument);
         return {};
     }
 
     const fs::path dir = parent.empty() ? fs::path(".") : parent;
 
+    // Step with increment(ec): the range-for form throws (and aborts the
+    // program) if an error surfaces partway through the listing.
     std::vector<fs::path> matches;
-    for (const auto& entry : fs::directory_iterator(dir, ec)) {
-        const std::string fname = entry.path().filename().string();
-        if (match(name, fname)) {
-            matches.push_back(parent.empty() ? fs::path(fname)
-                                             : parent / fname);
+    fs::directory_iterator it(dir, ec), end;
+    for (; !ec && it != end; it.increment(ec)) {
+        const fs::path fname = it->path().filename();
+        if (match(name, fname.u8string())) {
+            matches.push_back(parent.empty() ? fname : parent / fname);
         }
     }
     if (ec) return {};

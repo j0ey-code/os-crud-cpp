@@ -8,6 +8,12 @@
 #include <vector>
 #include <functional>
 
+#ifdef _WIN32
+    #define NOMINMAX
+    #include <windows.h>
+    #include <shellapi.h>
+#endif
+
 namespace fs = std::filesystem;
 
 /*  v2.0 turns filemgr from an interactive, menu-driven console
@@ -77,6 +83,36 @@ void printUsage(std::ostream& os) {
     Global flags may appear anywhere (before or after the command),
     which is what users expect from a modern CLI. */
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    // Prompts echo the filename being confirmed, so the console must use
+    // the same code page as our strings (UTF-8 under the manifest)
+    // rather than its legacy OEM default.
+    SetConsoleOutputCP(GetACP());
+
+    /*  The embedded manifest makes argv UTF-8 on Windows 10 1903+. On
+        older Windows it arrives in the legacy code page instead, where
+        unrepresentable characters are "best-fit" mapped to look-alikes
+        ('Ω' -> 'O'), so a path could silently name a different file.
+        Refuse such arguments outright rather than act on a guess. */
+    if (GetACP() != CP_UTF8) {
+        int wargc = 0;
+        LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+        for (int i = 1; wargv && i < wargc; ++i) {
+            BOOL lossy = FALSE;
+            WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, wargv[i], -1,
+                                nullptr, 0, nullptr, &lossy);
+            if (lossy) {
+                std::cerr << "Error: argument " << i << " contains characters "
+                          << "this system's code page cannot represent; "
+                          << "refusing to guess which file was meant\n";
+                LocalFree(wargv);
+                return 2;
+            }
+        }
+        LocalFree(wargv);
+    }
+#endif
+
     bool dryRun    = false;
     bool assumeYes = false;
     std::string content;            // for `inst --content`
@@ -235,7 +271,8 @@ int main(int argc, char* argv[]) {
                                      + src.string() + "': " + gec.message());
         if (matches.empty())
             return Result::fail("No matches for pattern: " + src.string());
-        if (!fs::is_directory(dst))
+        std::error_code dec;
+        if (!fs::is_directory(dst, dec))
             return Result::fail("Destination must be an existing directory for a "
                                 "wildcard " + command + ": " + dst.string());
         return runBatch(matches,
@@ -256,45 +293,52 @@ int main(int argc, char* argv[]) {
 
     Result res;
 
-    if (command == "inst") {
-        if (!needArgs(1)) return 2;
-        res = mgr.createFile(argAt(0), content);
-    } else if (command == "mkdir") {
-        if (!needArgs(1)) return 2;
-        res = mgr.createDirectory(argAt(0));
-    } else if (command == "info") {
-        if (!needArgs(1)) return 2;
-        FileInfo info;
-        res = mgr.readInfo(argAt(0), info);
-        if (res.success) printFileInfo(info);
-    } else if (command == "rename") {
-        if (!needArgs(2)) return 2;
-        res = mgr.rename(argAt(0), argAt(1));
-    } else if (command == "cpy") {
-        if (!needArgs(2)) return 2;
-        res = globTwoArg(argAt(0), argAt(1),
-            [&](const fs::path& s, const fs::path& d) { return mgr.copy(s, d); });
-    } else if (command == "mov") {
-        if (!needArgs(2)) return 2;
-        res = globTwoArg(argAt(0), argAt(1),
-            [&](const fs::path& s, const fs::path& d) { return mgr.move(s, d); });
-    } else if (command == "del") {
-        if (!needArgs(1)) return 2;
-        res = globOneArg(argAt(0),
-            [&](const fs::path& t) { return mgr.remove(t, false); });
-    } else if (command == "trash") {
-        if (!needArgs(1)) return 2;
-        res = globOneArg(argAt(0),
-            [&](const fs::path& t) { return mgr.remove(t, true); });
-    } else if (command == "tree") {
-        if (!needArgs(1)) return 2;
-        std::string tree;
-        res = mgr.listTree(argAt(0), tree, depth);
-        if (res.success) std::cout << tree;
-    } else {
-        std::cerr << "Error: unknown command '" << command << "'\n\n";
-        printUsage(std::cerr);
-        return 2;
+    /*  Safety net: the operations report failures through Result, but an
+        exception that still escapes (e.g. a path the OS cannot convert)
+        must end as an ordinary failure, not a core dump. */
+    try {
+        if (command == "inst") {
+            if (!needArgs(1)) return 2;
+            res = mgr.createFile(argAt(0), content);
+        } else if (command == "mkdir") {
+            if (!needArgs(1)) return 2;
+            res = mgr.createDirectory(argAt(0));
+        } else if (command == "info") {
+            if (!needArgs(1)) return 2;
+            FileInfo info;
+            res = mgr.readInfo(argAt(0), info);
+            if (res.success) printFileInfo(info);
+        } else if (command == "rename") {
+            if (!needArgs(2)) return 2;
+            res = mgr.rename(argAt(0), argAt(1));
+        } else if (command == "cpy") {
+            if (!needArgs(2)) return 2;
+            res = globTwoArg(argAt(0), argAt(1),
+                [&](const fs::path& s, const fs::path& d) { return mgr.copy(s, d); });
+        } else if (command == "mov") {
+            if (!needArgs(2)) return 2;
+            res = globTwoArg(argAt(0), argAt(1),
+                [&](const fs::path& s, const fs::path& d) { return mgr.move(s, d); });
+        } else if (command == "del") {
+            if (!needArgs(1)) return 2;
+            res = globOneArg(argAt(0),
+                [&](const fs::path& t) { return mgr.remove(t, false); });
+        } else if (command == "trash") {
+            if (!needArgs(1)) return 2;
+            res = globOneArg(argAt(0),
+                [&](const fs::path& t) { return mgr.remove(t, true); });
+        } else if (command == "tree") {
+            if (!needArgs(1)) return 2;
+            std::string tree;
+            res = mgr.listTree(argAt(0), tree, depth);
+            if (res.success) std::cout << tree;
+        } else {
+            std::cerr << "Error: unknown command '" << command << "'\n\n";
+            printUsage(std::cerr);
+            return 2;
+        }
+    } catch (const std::exception& e) {
+        res = Result::fail(std::string("Unexpected error: ") + e.what());
     }
 
     /*  Status line goes to stderr (diagnostics), keeping stdout clean
