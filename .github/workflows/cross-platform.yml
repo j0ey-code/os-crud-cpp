@@ -36,8 +36,12 @@ jobs:
           Set-Location $dir
           'x' | Set-Content rel-probe.txt
           'x' | Set-Content abs-probe.txt
+          New-Item -ItemType Directory -Force sub | Out-Null
+          'x' | Set-Content sub\fwd-probe.txt
           & $exe -y trash rel-probe.txt 2>&1 | % { "::notice title=relative::$_" }
           & $exe -y trash (Join-Path $dir abs-probe.txt) 2>&1 | % { "::notice title=absolute::$_" }
+          & $exe -y trash sub/fwd-probe.txt 2>&1 | % { "::notice title=forward-slash::$_" }
+          "::notice title=left-in-sub::[" + ((Get-ChildItem sub).Name -join ', ') + "]"
           "::notice title=left-on-disk::" + ((Get-ChildItem $dir).Name -join ', ')
           $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
           $found = Get-ChildItem -Force "C:\`$Recycle.Bin\$sid" -Filter '$I*' -ErrorAction SilentlyContinue | % {
