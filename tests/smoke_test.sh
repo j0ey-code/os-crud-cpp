@@ -232,10 +232,18 @@ in_trash() {   # in_trash <basename>  — best-effort, per platform
         macos) ls "$HOME/.Trash" 2>/dev/null | grep -qxF "$1" ||
                    ! ls "$HOME/.Trash" >/dev/null 2>&1 ;;  # unreadable (TCC): skip
         windows)
+            # Read the Recycle Bin's own $I records, which hold each item's
+            # full original path. Shell display names are no good here:
+            # Explorer hides known extensions ("notes", not "notes.txt").
             if command -v powershell.exe >/dev/null 2>&1; then
-                powershell.exe -NoProfile -Command \
-                    "(New-Object -ComObject Shell.Application).NameSpace(10).Items() | % { \$_.Name }" \
-                    2>/dev/null | tr -d '\r' | grep -qF "$1"
+                powershell.exe -NoProfile -Command '
+                    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+                    Get-PSDrive -PSProvider FileSystem | % {
+                        Get-ChildItem -Force "$($_.Root)`$Recycle.Bin\$sid" -Filter "`$I*" -ErrorAction SilentlyContinue
+                    } | % {
+                        $b = [IO.File]::ReadAllBytes($_.FullName)
+                        [Text.Encoding]::Unicode.GetString($b, 28, $b.Length - 28).TrimEnd([char]0)
+                    }' 2>/dev/null | tr -d '\r' | grep -qF "\\$1"
             else
                 true
             fi ;;
