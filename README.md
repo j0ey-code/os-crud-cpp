@@ -133,6 +133,16 @@ This will create the "filemgr" executable within the project's build directory, 
     - unreadable sub-directories are now labeled appropriately as such for the recursive tree listing operation too
     - move logic fixed so copy-then-delete only fires upon *actual* cross-filesystem errors, not every move / rename
 
+- 09/2X/2026: returning to this side-project nearly 2 months later to conduct full suite of evaluation
+    - naive dev strategies, but also this as a backburner project, left it here
+    - full unit and smoke tests for cross-compatibility had not been fully conducted
+    - edge cases and tests prepared for Windows and macOS platform integrity
+    - compiles on all OSes, but failing multiple edge case checks for UTF-8 vs. Unicdoe filename handling
+    - macOS presented with a file injeection error because deletion was handled via command-line through osascript improperly
+    - core dumped on permission-denied file operations, not just error handled (for ALL OSes actually, even Linux)
+    - Recycle Bin diagnostics on Windows and macOS vs. Trash on Linux
+    - no case-sensitivity for filenames on Windows and macOS
+
 ## TO-DO List
 
 - Flesh out README.md more~!!
