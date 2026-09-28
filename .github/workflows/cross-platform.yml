@@ -24,6 +24,30 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
+      # TEMPORARY: evidence for the Windows trash investigation.
+      - name: Diagnose Windows trash
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path build/Release/filemgr.exe).Path
+          $dir = Join-Path $env:TEMP "trashdiag"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Set-Location $dir
+          'x' | Set-Content rel-probe.txt
+          'x' | Set-Content abs-probe.txt
+          & $exe -y trash rel-probe.txt 2>&1 | % { "::notice title=relative::$_" }
+          & $exe -y trash (Join-Path $dir abs-probe.txt) 2>&1 | % { "::notice title=absolute::$_" }
+          "::notice title=left-on-disk::" + ((Get-ChildItem $dir).Name -join ', ')
+          $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $found = Get-ChildItem -Force "C:\`$Recycle.Bin\$sid" -Filter '$I*' -ErrorAction SilentlyContinue | % {
+              $b = [IO.File]::ReadAllBytes($_.FullName)
+              [Text.Encoding]::Unicode.GetString($b, 28, $b.Length - 28).TrimEnd([char]0)
+          } | ? { $_ -like '*probe*' }
+          "::notice title=raw-recycle-bin::TEMP=$env:TEMP ; probes: " + ($found -join ' | ')
+          $ns = (New-Object -ComObject Shell.Application).NameSpace(10)
+          "::notice title=shell-recycle-bin::" + (($ns.Items() | % { $_.Name + ' <- ' + $ns.GetDetailsOf($_, 1) }) -join ' | ')
+
       # Git Bash on Windows, so one script covers all three platforms.
       - name: Smoke tests
         shell: bash
