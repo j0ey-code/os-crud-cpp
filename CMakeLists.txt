@@ -13,4 +13,15 @@ add_executable(filemgr
 
 if(WIN32)
     target_link_libraries(filemgr PRIVATE shell32)
+
+    # UTF-8 process code page, so non-ASCII filenames survive argv and
+    # std::string round-trips instead of being "best-fit" mangled.
+    if(MSVC)
+        target_sources(filemgr PRIVATE src/win/filemgr.manifest)
+        # Sources contain UTF-8 literals (tree glyphs, prompts).
+        target_compile_options(filemgr PRIVATE /utf-8)
+    else()
+        enable_language(RC)
+        target_sources(filemgr PRIVATE src/win/filemgr.rc)
+    endif()
 endif()
