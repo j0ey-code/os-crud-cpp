@@ -57,6 +57,10 @@ check() {
         PASS=$((PASS + 1))
     else
         echo "FAIL  $name"
+        # Surface failures as GitHub annotations (visible without logs).
+        if [ -n "${GITHUB_ACTIONS:-}" ]; then
+            echo "::error title=$TARGET::$name"
+        fi
         FAIL=$((FAIL + 1))
         FAILED+=("$name")
     fi
@@ -342,6 +346,9 @@ fi
 
 echo
 echo "== $PASS passed, $FAIL failed (target: $TARGET)"
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "::notice title=$TARGET::$PASS passed, $FAIL failed"
+fi
 for f in "${FAILED[@]+"${FAILED[@]}"}"; do echo "   - $f"; done
 
 cd / && chmod -R u+rwx "$ROOT" 2>/dev/null; rm -rf "$ROOT"
