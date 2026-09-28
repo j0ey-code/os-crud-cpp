@@ -141,8 +141,30 @@ t_rename_case_only() {
     fm rename Report.txt report.txt 2>/dev/null &&
         ls | grep -qx 'report.txt'
 }
+t_rename_no_clobber_case_variant() {
+    # On a case-insensitive FS, b.txt names the DIFFERENT file B.txt;
+    # allowing case-only renames must not let this overwrite it. (On a
+    # case-sensitive FS the rename is legitimate; B.txt survives either way.)
+    fresh rename_clobber
+    echo a > a.txt
+    echo KEEP > B.txt
+    fm rename a.txt b.txt >/dev/null 2>&1
+    [ "$(cat B.txt)" = KEEP ]
+}
 check "rename file/extension"        t_rename
 check "rename case-only (Foo->foo)"  t_rename_case_only
+check "rename never clobbers B.txt"  t_rename_no_clobber_case_variant
+
+if [ "$TARGET" != windows ]; then
+    t_rename_hardlink_refused() {
+        # A hard link is the same file under a separate name: renaming
+        # onto it must be refused, not silently "succeed" as a no-op.
+        fresh rename_hardlink
+        echo x > a.txt && ln a.txt b.txt
+        ! fm rename a.txt b.txt >/dev/null 2>&1 && [ -f a.txt ] && [ -f b.txt ]
+    }
+    check "rename onto own hard link refused" t_rename_hardlink_refused
+fi
 
 # --- copy / move ------------------------------------------------------
 
