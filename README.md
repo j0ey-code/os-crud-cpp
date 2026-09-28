@@ -107,18 +107,22 @@ main.cpp
 
 First, ensure you have a C++17 compatible compiler installed properly, along with CMake3.15+. 
 
-Then, from the *project's working directory*, run the following commands \(or, the Windows / macOS equivalents\)...
+Then, from the *project's working directory / PWD*, run the following commands \(or, the Windows / macOS equivalents\)...
 
 1. mkdir build
 2. cd build
 3. cmake ..
 4. make
 
-This will create the "filemgr" executable within the project's build directory. 
+This will create the "filemgr" executable within the project's build directory, which is the executable to use.
 
 ## Changelog
 
 - 06/23/2026: first push to GitHub, just to get it out in the repos for now
+    - the initial draft was a menu-based program which did the same operations
+    - it was explicitly branched off and left behind as the v1.0, because the CLI tool was the final goal
+    - still available for download and use, but likely riddled with errors not yet patched MEANING
+        - file operation errors like delete, send to trash, or copy which were not 100% resolved yet MAY ERROR AND I AM NOT LIABLE!!
 
 - 07/20/2026: full v2.0 now (almost?) consolidated, multiple med-prio bugs / errors now fixed including...
     - infinite recursion bug upon copy within self operation, safeguard now in place
