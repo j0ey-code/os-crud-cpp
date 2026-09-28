@@ -21,14 +21,58 @@ namespace {
 bool isSelfOrDescendant(const fs::path& source, const fs::path& dest) {
     std::error_code ec;
     fs::path s = fs::weakly_canonical(source, ec);
-    if (ec) { s = fs::absolute(source).lexically_normal(); ec.clear(); }
+    if (ec) { s = fs::absolute(source, ec).lexically_normal(); ec.clear(); }
     fs::path d = fs::weakly_canonical(dest, ec);
-    if (ec) { d = fs::absolute(dest).lexically_normal(); }
+    if (ec) { d = fs::absolute(dest, ec).lexically_normal(); }
 
     fs::path rel = d.lexically_relative(s);
     if (rel.empty()) return false;          // unrelated / different roots
     if (rel == fs::path(".")) return true;  // same directory
     return *rel.begin() != "..";            // no leading ".." => nested
+}
+
+/*  Existence checks that can't crash. The throwing fs::exists() raises
+    an exception when it can't TELL whether a path exists (e.g. permission
+    denied on a parent directory), and nothing caught it, so the whole
+    process aborted with a core dump. These report the real reason
+    instead, and never mistake "can't look" for "not there". */
+Result requireExists(const fs::path& p, const std::string& notFoundMsg) {
+    std::error_code ec;
+    if (fs::exists(p, ec)) return Result::ok();
+    if (ec) return Result::fail("Cannot access " + p.string() + ": " + ec.message());
+    return Result::fail(notFoundMsg + p.string());
+}
+
+Result requireAbsent(const fs::path& p, const std::string& existsMsg) {
+    std::error_code ec;
+    const bool there = fs::exists(p, ec);
+    if (ec) return Result::fail("Cannot access " + p.string() + ": " + ec.message());
+    if (there) return Result::fail(existsMsg + p.string());
+    return Result::ok();
+}
+
+// Non-throwing is_directory(); "can't tell" counts as not a directory,
+// and the operation that follows reports the underlying error itself.
+bool isDir(const fs::path& p) {
+    std::error_code ec;
+    return fs::is_directory(p, ec);
+}
+
+fs::path parentOrDot(const fs::path& p) {
+    return p.has_parent_path() ? p.parent_path() : fs::path(".");
+}
+
+// True if p's directory holds an entry spelled EXACTLY like p's filename
+// (a case-insensitive exists() can't tell Report.txt from report.txt).
+bool hasExactEntry(const fs::path& p) {
+    std::error_code ec;
+    fs::directory_iterator it(parentOrDot(p), ec), end;
+    for (; !ec && it != end; it.increment(ec)) {
+        if (it->path().filename().native() == p.filename().native()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /*  True if `to` is merely a different spelling of `from`'s own directory
@@ -46,22 +90,6 @@ bool isSelfOrDescendant(const fs::path& source, const fs::path& dest) {
         and would equate a link with its target;
       - no entry spelled exactly like `to` may exist (a hard link to the
         same file is still a separate entry). */
-fs::path parentOrDot(const fs::path& p) {
-    return p.has_parent_path() ? p.parent_path() : fs::path(".");
-}
-
-// True if p's directory holds an entry spelled EXACTLY like p's filename
-// (a case-insensitive exists() can't tell Report.txt from report.txt).
-bool hasExactEntry(const fs::path& p) {
-    std::error_code ec;
-    for (const auto& entry : fs::directory_iterator(parentOrDot(p), ec)) {
-        if (entry.path().filename().native() == p.filename().native()) {
-            return true;
-        }
-    }
-    return false;
-}
-
 bool isRespellingOf(const fs::path& from, const fs::path& to) {
     if (from.filename().native() == to.filename().native()) return false;
 
@@ -90,7 +118,8 @@ std::error_code renameRespelling(const fs::path& from, const fs::path& to) {
 
     fs::path tmp = from;
     tmp += ".filemgr-tmp";
-    for (int i = 1; fs::exists(tmp); ++i) {
+    for (int i = 1; fs::exists(tmp, ec) || ec; ++i) {
+        if (ec) return ec;
         tmp = from;
         tmp += ".filemgr-tmp" + std::to_string(i);
     }
@@ -124,9 +153,8 @@ FileManager::FileManager(Logger& logger, ConfirmCallback confirm,
 
 Result FileManager::createFile(const fs::path& filepath,
                                const std::string& initialContent) {
-    if (fs::exists(filepath)) {
-        return Result::fail("Already exists: " + filepath.string());
-    }
+    auto absent = requireAbsent(filepath, "Already exists: ");
+    if (!absent.success) return absent;
 
     auto parentCheck = validateParentExists(filepath);
     if (!parentCheck.success) return parentCheck;
@@ -146,9 +174,8 @@ Result FileManager::createFile(const fs::path& filepath,
 }
 
 Result FileManager::createDirectory(const fs::path& dirpath) {
-    if (fs::exists(dirpath)) {
-        return Result::fail("Already exists: " + dirpath.string());
-    }
+    auto absent = requireAbsent(dirpath, "Already exists: ");
+    if (!absent.success) return absent;
 
     return execOrSim("MKDIR", dirpath.string(),
         "create directory: " + dirpath.string(),
@@ -163,14 +190,15 @@ Result FileManager::createDirectory(const fs::path& dirpath) {
 // READ 
 
 Result FileManager::readInfo(const fs::path& target, FileInfo& out) {
-    std::error_code ec;
-    if (!fs::exists(target, ec)) {
-        return Result::fail("Does not exist: " + target.string());
-    }
+    // Distinguish "not there" from "can't look" (permission denied),
+    // which used to be reported misleadingly as "Does not exist".
+    auto present = requireExists(target, "Does not exist: ");
+    if (!present.success) return present;
 
+    std::error_code ec;
     out.name         = target.filename().string();
     out.extension    = target.extension().string();
-    out.absolutePath = fs::absolute(target).string();
+    out.absolutePath = fs::absolute(target, ec).string();
     out.isDirectory  = fs::is_directory(target, ec);
     out.type         = fs::status(target, ec).type();
     out.permissions  = fs::status(target, ec).permissions();
@@ -181,14 +209,15 @@ Result FileManager::readInfo(const fs::path& target, FileInfo& out) {
         out.childCount = 0;
         // Open explicitly so a permission-denied directory reports an
         // incomplete count rather than a misleading "0 children".
+        // Step with increment(ec): the range-for form throws (and
+        // aborts) if an error surfaces partway through the listing.
         std::error_code dirEc;
-        fs::directory_iterator dirIt(target, dirEc);
+        fs::directory_iterator dirIt(target, dirEc), end;
+        for (; !dirEc && dirIt != end; dirIt.increment(dirEc)) {
+            ++out.childCount;
+        }
         if (dirEc) {
             out.childCountComplete = false;
-        } else {
-            for ([[maybe_unused]] auto& _ : dirIt) {
-                ++out.childCount;
-            }
         }
     } else {
         out.sizeBytes  = fs::file_size(target, ec);
@@ -204,12 +233,13 @@ Result FileManager::readInfo(const fs::path& target, FileInfo& out) {
 
 Result FileManager::rename(const fs::path& oldPath,
                            const fs::path& newPath) {
-    if (!fs::exists(oldPath)) {
-        return Result::fail("Source not found: " + oldPath.string());
-    }
+    auto present = requireExists(oldPath, "Source not found: ");
+    if (!present.success) return present;
+
     const bool respelling = isRespellingOf(oldPath, newPath);
-    if (!respelling && fs::exists(newPath)) {
-        return Result::fail("Destination already exists: " + newPath.string());
+    if (!respelling) {
+        auto absent = requireAbsent(newPath, "Destination already exists: ");
+        if (!absent.success) return absent;
     }
 
     // fs::rename handles both renaming and "changing extension"
@@ -234,22 +264,28 @@ Result FileManager::rename(const fs::path& oldPath,
 // DELETE 
 
 Result FileManager::remove(const fs::path& target, bool useTrash) {
-    if (!fs::exists(target)) {
-        return Result::fail("Does not exist: " + target.string());
-    }
+    auto present = requireExists(target, "Does not exist: ");
+    if (!present.success) return present;
 
     std::string verb = useTrash ? "move to trash" : "permanently delete";
 
     // build a descriptive warning for the confirmation prompt
     // for directories, count children so the user knows the scope
     std::string warning = verb + ": " + target.string();
-    if (fs::is_directory(target)) {
+    if (isDir(target)) {
+        // Step with increment(ec): the range-for form throws on the first
+        // unreadable subdirectory, which aborted the whole program. If the
+        // walk stops early, say the count is a lower bound rather than
+        // understate what the user is about to delete.
         std::size_t count = 0;
         std::error_code ec;
-        for ([[maybe_unused]] auto& _ : fs::recursive_directory_iterator(target, ec)) {
+        fs::recursive_directory_iterator it(target, ec), end;
+        for (; !ec && it != end; it.increment(ec)) {
             ++count;
         }
-        warning += " (directory with " + std::to_string(count) + " items)";
+        warning += ec ? " (directory with at least " + std::to_string(count)
+                            + " items; some could not be read)"
+                      : " (directory with " + std::to_string(count) + " items)";
     }
 
     // Ask for confirmation. In dry-run mode, skip the prompt —
@@ -266,7 +302,7 @@ Result FileManager::remove(const fs::path& target, bool useTrash) {
                 return platform::moveToTrash(target);
             }
             std::error_code ec;
-            if (fs::is_directory(target)) {
+            if (isDir(target)) {
                 fs::remove_all(target, ec);
             } else {
                 fs::remove(target, ec);
@@ -280,35 +316,32 @@ Result FileManager::remove(const fs::path& target, bool useTrash) {
 
 Result FileManager::copy(const fs::path& source,
                          const fs::path& destination) {
-    if (!fs::exists(source)) {
-        return Result::fail("Source not found: " + source.string());
-    }
+    auto present = requireExists(source, "Source not found: ");
+    if (!present.success) return present;
 
     // If the destination is an existing directory, copy INTO it
     // rather than failing. This mirrors how `cp` behaves:
     //   cp notes.txt ~/backup/   →   ~/backup/notes.txt
     fs::path actualDest = destination;
-    if (fs::is_directory(destination)) {
+    if (isDir(destination)) {
         actualDest = destination / source.filename();
     }
 
     // Guard against recursively copying a directory into itself or a
     // descendant, which would loop until the path length explodes.
-    if (fs::is_directory(source) && isSelfOrDescendant(source, actualDest)) {
+    if (isDir(source) && isSelfOrDescendant(source, actualDest)) {
         return Result::fail("Refusing to copy a directory into itself or a "
                             "subdirectory of itself: " + source.string());
     }
 
-    if (fs::exists(actualDest)) {
-        return Result::fail("Destination already exists: "
-                            + actualDest.string());
-    }
+    auto absent = requireAbsent(actualDest, "Destination already exists: ");
+    if (!absent.success) return absent;
 
     return execOrSim("COPY", source.string(),
         "copy " + source.string() + " → " + actualDest.string(),
         [&]() -> Result {
             std::error_code ec;
-            if (fs::is_directory(source)) {
+            if (isDir(source)) {
                 fs::copy(source, actualDest,
                          fs::copy_options::recursive, ec);
             } else {
@@ -323,9 +356,8 @@ Result FileManager::copy(const fs::path& source,
 
 Result FileManager::move(const fs::path& source,
                          const fs::path& destination) {
-    if (!fs::exists(source)) {
-        return Result::fail("Source not found: " + source.string());
-    }
+    auto present = requireExists(source, "Source not found: ");
+    if (!present.success) return present;
 
     // A case-only respelling (mov Data data) is a rename in place. It must
     // be caught first: `data` "is a directory" (it's Data itself), so the
@@ -333,13 +365,13 @@ Result FileManager::move(const fs::path& source,
     const bool respelling = isRespellingOf(source, destination);
 
     fs::path actualDest = destination;
-    if (!respelling && fs::is_directory(destination)) {
+    if (!respelling && isDir(destination)) {
         actualDest = destination / source.filename();
     }
 
-    if (!respelling && fs::exists(actualDest)) {
-        return Result::fail("Destination already exists: "
-                            + actualDest.string());
+    if (!respelling) {
+        auto absent = requireAbsent(actualDest, "Destination already exists: ");
+        if (!absent.success) return absent;
     }
 
     // fs::rename works as a move when crossing directories, and on the
@@ -379,7 +411,7 @@ Result FileManager::move(const fs::path& source,
             }
 
             std::error_code rmEc;
-            if (fs::is_directory(source)) {
+            if (isDir(source)) {
                 fs::remove_all(source, rmEc);
             } else {
                 fs::remove(source, rmEc);
@@ -398,10 +430,9 @@ Result FileManager::move(const fs::path& source,
 Result FileManager::listTree(const fs::path& dirpath,
                              std::string& output,
                              int maxDepth) {
-    if (!fs::exists(dirpath)) {
-        return Result::fail("Does not exist: " + dirpath.string());
-    }
-    if (!fs::is_directory(dirpath)) {
+    auto present = requireExists(dirpath, "Does not exist: ");
+    if (!present.success) return present;
+    if (!isDir(dirpath)) {
         return Result::fail("Not a directory: " + dirpath.string());
     }
 
@@ -437,9 +468,13 @@ Result FileManager::listTree(const fs::path& dirpath,
         // directory_iterator order is OS-dependent — on Linux it's
         // essentially random (inode order), so sorting alphabetically
         // makes the tree readable and reproducible.
+        // Step with increment(ec) so an error partway through the listing
+        // is reported with a marker instead of throwing.
         std::vector<fs::directory_entry> entries;
-        for (auto& entry : dirIt) {
-            entries.push_back(entry);
+        std::error_code iterEc;
+        for (fs::directory_iterator end; !iterEc && dirIt != end;
+             dirIt.increment(iterEc)) {
+            entries.push_back(*dirIt);
         }
         std::sort(entries.begin(), entries.end(),
                   [](const fs::directory_entry& a,
@@ -448,7 +483,8 @@ Result FileManager::listTree(const fs::path& dirpath,
         });
 
         for (std::size_t i = 0; i < entries.size(); ++i) {
-            bool isLast = (i == entries.size() - 1);
+            // If the listing broke off, the marker below is the last line.
+            bool isLast = !iterEc && (i == entries.size() - 1);
             auto& entry = entries[i];
 
             // Tree-drawing characters:
@@ -470,6 +506,11 @@ Result FileManager::listTree(const fs::path& dirpath,
                 walk(entry.path(), prefix + extension, currentDepth + 1);
             }
         }
+
+        if (iterEc) {
+            output += prefix + "└── [unreadable: " + iterEc.message() + "]\n";
+            ++unreadable;
+        }
     };
 
     walk(dirpath, "", 0);
@@ -486,11 +527,8 @@ Result FileManager::listTree(const fs::path& dirpath,
 
 Result FileManager::validateParentExists(const fs::path& p) {
     auto parent = p.parent_path();
-    if (!parent.empty() && !fs::exists(parent)) {
-        return Result::fail("Parent directory does not exist: "
-                            + parent.string());
-    }
-    return Result::ok();
+    if (parent.empty()) return Result::ok();
+    return requireExists(parent, "Parent directory does not exist: ");
 
 }
 
@@ -509,7 +547,14 @@ Result FileManager::execOrSim(const std::string& operation,
         return Result::ok(msg);
     }
 
-    Result res = action();
+    // Safety net: an exception escaping here would abort the program and
+    // skip the audit-log entry, so turn it into an ordinary failure.
+    Result res;
+    try {
+        res = action();
+    } catch (const std::exception& e) {
+        res = Result::fail(std::string("Unexpected error: ") + e.what());
+    }
     m_logger.log(operation, target,
                  (res.success ? "OK: " : "FAIL: ") + res.message);
     return res;

@@ -150,10 +150,16 @@ Result moveToTrash(const std::filesystem::path& target) {
     // moved file and its .trashinfo basenames in lock-step.
     const std::string baseName = target.filename().string();
     std::string trashName = baseName;
-    for (int i = 1;
-         fs::exists(trashFiles / trashName) ||
-         fs::exists(trashInfo / (trashName + ".trashinfo"));
-         ++i) {
+    // (Non-throwing exists(): if the trash can't even be inspected, fail
+    // cleanly rather than abort.)
+    for (int i = 1;; ++i) {
+        const bool taken =
+            fs::exists(trashFiles / trashName, ec) ||
+            (!ec && fs::exists(trashInfo / (trashName + ".trashinfo"), ec));
+        if (ec) {
+            return Result::fail("Cannot access trash: " + ec.message());
+        }
+        if (!taken) break;
         trashName = baseName + "." + std::to_string(i);
     }
 

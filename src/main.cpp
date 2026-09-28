@@ -271,7 +271,8 @@ int main(int argc, char* argv[]) {
                                      + src.string() + "': " + gec.message());
         if (matches.empty())
             return Result::fail("No matches for pattern: " + src.string());
-        if (!fs::is_directory(dst))
+        std::error_code dec;
+        if (!fs::is_directory(dst, dec))
             return Result::fail("Destination must be an existing directory for a "
                                 "wildcard " + command + ": " + dst.string());
         return runBatch(matches,
@@ -292,45 +293,52 @@ int main(int argc, char* argv[]) {
 
     Result res;
 
-    if (command == "inst") {
-        if (!needArgs(1)) return 2;
-        res = mgr.createFile(argAt(0), content);
-    } else if (command == "mkdir") {
-        if (!needArgs(1)) return 2;
-        res = mgr.createDirectory(argAt(0));
-    } else if (command == "info") {
-        if (!needArgs(1)) return 2;
-        FileInfo info;
-        res = mgr.readInfo(argAt(0), info);
-        if (res.success) printFileInfo(info);
-    } else if (command == "rename") {
-        if (!needArgs(2)) return 2;
-        res = mgr.rename(argAt(0), argAt(1));
-    } else if (command == "cpy") {
-        if (!needArgs(2)) return 2;
-        res = globTwoArg(argAt(0), argAt(1),
-            [&](const fs::path& s, const fs::path& d) { return mgr.copy(s, d); });
-    } else if (command == "mov") {
-        if (!needArgs(2)) return 2;
-        res = globTwoArg(argAt(0), argAt(1),
-            [&](const fs::path& s, const fs::path& d) { return mgr.move(s, d); });
-    } else if (command == "del") {
-        if (!needArgs(1)) return 2;
-        res = globOneArg(argAt(0),
-            [&](const fs::path& t) { return mgr.remove(t, false); });
-    } else if (command == "trash") {
-        if (!needArgs(1)) return 2;
-        res = globOneArg(argAt(0),
-            [&](const fs::path& t) { return mgr.remove(t, true); });
-    } else if (command == "tree") {
-        if (!needArgs(1)) return 2;
-        std::string tree;
-        res = mgr.listTree(argAt(0), tree, depth);
-        if (res.success) std::cout << tree;
-    } else {
-        std::cerr << "Error: unknown command '" << command << "'\n\n";
-        printUsage(std::cerr);
-        return 2;
+    /*  Safety net: the operations report failures through Result, but an
+        exception that still escapes (e.g. a path the OS cannot convert)
+        must end as an ordinary failure, not a core dump. */
+    try {
+        if (command == "inst") {
+            if (!needArgs(1)) return 2;
+            res = mgr.createFile(argAt(0), content);
+        } else if (command == "mkdir") {
+            if (!needArgs(1)) return 2;
+            res = mgr.createDirectory(argAt(0));
+        } else if (command == "info") {
+            if (!needArgs(1)) return 2;
+            FileInfo info;
+            res = mgr.readInfo(argAt(0), info);
+            if (res.success) printFileInfo(info);
+        } else if (command == "rename") {
+            if (!needArgs(2)) return 2;
+            res = mgr.rename(argAt(0), argAt(1));
+        } else if (command == "cpy") {
+            if (!needArgs(2)) return 2;
+            res = globTwoArg(argAt(0), argAt(1),
+                [&](const fs::path& s, const fs::path& d) { return mgr.copy(s, d); });
+        } else if (command == "mov") {
+            if (!needArgs(2)) return 2;
+            res = globTwoArg(argAt(0), argAt(1),
+                [&](const fs::path& s, const fs::path& d) { return mgr.move(s, d); });
+        } else if (command == "del") {
+            if (!needArgs(1)) return 2;
+            res = globOneArg(argAt(0),
+                [&](const fs::path& t) { return mgr.remove(t, false); });
+        } else if (command == "trash") {
+            if (!needArgs(1)) return 2;
+            res = globOneArg(argAt(0),
+                [&](const fs::path& t) { return mgr.remove(t, true); });
+        } else if (command == "tree") {
+            if (!needArgs(1)) return 2;
+            std::string tree;
+            res = mgr.listTree(argAt(0), tree, depth);
+            if (res.success) std::cout << tree;
+        } else {
+            std::cerr << "Error: unknown command '" << command << "'\n\n";
+            printUsage(std::cerr);
+            return 2;
+        }
+    } catch (const std::exception& e) {
+        res = Result::fail(std::string("Unexpected error: ") + e.what());
     }
 
     /*  Status line goes to stderr (diagnostics), keeping stdout clean

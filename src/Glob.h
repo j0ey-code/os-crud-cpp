@@ -110,9 +110,12 @@ expand(const std::filesystem::path& pattern, std::error_code& ec) {
 
     const fs::path dir = parent.empty() ? fs::path(".") : parent;
 
+    // Step with increment(ec): the range-for form throws (and aborts the
+    // program) if an error surfaces partway through the listing.
     std::vector<fs::path> matches;
-    for (const auto& entry : fs::directory_iterator(dir, ec)) {
-        const fs::path fname = entry.path().filename();
+    fs::directory_iterator it(dir, ec), end;
+    for (; !ec && it != end; it.increment(ec)) {
+        const fs::path fname = it->path().filename();
         if (match(name, fname.u8string())) {
             matches.push_back(parent.empty() ? fname : parent / fname);
         }
